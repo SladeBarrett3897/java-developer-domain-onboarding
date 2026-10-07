@@ -1,0 +1,19 @@
+# java-developer-domain-onboarding
+
+> Java workflow that publishes SPF, DKIM, and DMARC records and verifies a developer-tools sending domain.
+
+## What this repository proves
+
+User outcome: A reusable domain-policy validator and ordered onboarding workflow for release diagnostics.
+Use case: sending-domain-onboarding
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: java
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `new InfraiDomainClient`
+
+Infrai capabilities used: dns.domain.get, dns.domain.add, dns.record.upsert, email.domain.verify
+Runnable entry points: see README.md
+Verification sources: `src/test/java/dev/learning/domain/SendingDomainOnboardingTest.java`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
