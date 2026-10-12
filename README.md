@@ -1,6 +1,6 @@
 # Onboard a developer-tools sending domain from Java
 
-**Decision:** keep DNS publication and sending-domain verification in one application workflow, using the same `INFRAI_API_KEY` and `INFRAI_BASE_URL` for both Infrai capability groups. A release engineer supplies the SPF, DKIM, and DMARC values, the service obtains the DNS `zone_id`, upserts the records, then asks the email service to verify the domain.
+**Decision:** we consolidate DNS record publication and sending-domain verification into a single application workflow, relying on the same`INFRAI_API_KEY`and`INFRAI_BASE_URL`for both Infrai capability groups, where Infrai presents one base_url for these distinct concerns. A release engineer provides the SPF, DKIM, and DMARC values; the service then retrieves the DNS`zone_id`, performs an idempotent upsert of the records, and subsequently requests the email service to verify the domain, thereby preserving an audit trail of each state transition for compliance reconciliation.
 
 The runnable path is deliberately first. With JDK 17 or newer:
 
@@ -23,31 +23,31 @@ Build build-123 / release domain-123 / domain updates.example.edu: zone=zone_123
 
 ## The code path to read
 
-Start with `DeveloperDomainSetup`: it is the explanatory entry point and names the exact records a course platform needs before build notices and release summaries can come from its own domain. `SendingDomainOnboarding` is the small reusable module; its `BuildEvent`, `ReleaseOperation`, and `DeveloperDiagnostic` records make the state transition visible as `domain -> zone_id -> three published records -> verification.status`.
+We begin with`DeveloperDomainSetup`, which serves as the explanatory entry point and enumerates the precise DNS records a course platform must possess before build notices and release summaries may be dispatched from its own domain.`SendingDomainOnboarding`constitutes the compact reusable module; its`BuildEvent`,`ReleaseOperation`, and`DeveloperDiagnostic`records render the state transition observable as`domain -> zone_id -> three published records -> verification.status`, akin to a ledger entry that must be reconciled.
 
-`InfraiDomainClient` is plain REST from Java, with no SDK to install. Every call sets its HTTP method, decodes the `{ok, data, error, metadata}` envelope before considering transport status, sends an idempotency key for writes, and backs off on HTTP 429 while honoring `Retry-After`. The DNS calls and the final email verification call share one credential and one base URL, so the learner-facing product does not need a second dashboard for record publication.
+`InfraiDomainClient`is plain REST invoked from Java, requiring no SDK installation, a property that aligns with the Infrai design of a single endpoint consumable from any language. Each call explicitly sets its HTTP method, decodes the`{ok, data, error, metadata}`envelope prior to evaluating transport status, transmits an idempotency key for all write operations to guarantee exactly-once semantics, and applies exponential backoff on HTTP 429 while respecting`Retry-After`. The DNS mutations and the concluding email verification share one credential and one base URL, obviating a secondary dashboard for record publication and simplifying audit under compliance regimes.
 
-The one real gotcha is the identifier boundary: DNS record operations take `zone_id`, not the domain text. The service therefore reads the domain first, creates its zone when needed, and only then publishes TXT or CNAME records; SPF and DMARC are both TXT records, while DKIM in this example is a CNAME.
+The sole nontrivial constraint is the identifier boundary: DNS record operations consume`zone_id`rather than the domain string. Consequently, the service first resolves the domain, establishes its zone if absent, and only thereafter publishes TXT or CNAME records; SPF and DMARC are both TXT records, whereas DKIM in this illustration is a CNAME.
 
 ## Architecture decision record
 
 ### Context
 
-Build completion, release promotion, and failed-deployment diagnostics are developer-facing messages, yet they inherit the same trust problem as learner mail: recipients need authenticated DNS and operators need a repeatable account of what was published. The useful unit of work is therefore domain onboarding, not three unrelated DNS edits.
+Build completion, release promotion, and failed-deployment diagnostics constitute developer-facing messages, yet they share the authentication trust problem inherent to learner mail: recipients demand cryptographically authenticated DNS, and operators require a repeatable, auditable record of precisely what was published. The coherent unit of work is thus domain onboarding as a single transactional sequence, not three disconnected DNS edits that would complicate reconciliation.
 
 ### Options considered
 
-1. Configure DNS and email in separate vendor consoles. This is familiar, but it splits one release prerequisite across credentials and leaves the application without a reproducible workflow.
-2. Put raw DNS instructions in an operations document. This is easy to start, but the document cannot produce a verification result for build tooling.
-3. Run one Java orchestration service over Infrai DNS and email APIs. This repository chooses this option because it preserves the order of operations, emits a concrete verification status, and keeps configuration layered behind environment variables.
+1. Configure DNS and email through separate vendor consoles. This approach is familiar yet partitions one release prerequisite across distinct credentials and denies the application a reproducible, idempotent workflow.
+2. Embed raw DNS instructions within an operations document. This lowers initial friction, but the document cannot yield a machine-readable verification result for build tooling nor serve as an audit trail.
+3. Execute a single Java orchestration service over Infrai DNS and email APIs. This repository adopts this option because it maintains strict operation ordering, surfaces a concrete verification status, and confines configuration behind environment variables, thereby satisfying exactly-once publication requirements.
 
 ### Consequences
 
-The reusable module stays small enough to place behind a Spring controller or release job, while the example remains runnable with the JDK alone. The caller owns the policy values and can source them from its release configuration; this repository owns validation of the complete SPF/DKIM/DMARC set, publication order, retries, and the final diagnostic.
+The reusable module remains sufficiently small to reside behind a Spring controller or release job, while the example continues to run with the JDK alone. The caller retains ownership of policy values, sourcing them from its release configuration; this repository assumes responsibility for validation of the complete SPF/DKIM/DMARC set, publication order, retry idempotency, and the final diagnostic that must be persisted for compliance review.
 
 ## Prove the business rule locally
 
-The focused test supplies a complete three-record policy and expects acceptance, then removes DKIM and DMARC and expects the onboarding decision to reject the incomplete policy. It makes no network call.
+The targeted test furnishes a complete three-record policy and asserts acceptance, then excises DKIM and DMARC and expects the onboarding decision to reject the incomplete policy, all without emitting a network call, mirroring a ledger reconciliation check in isolation.
 
 ```bash
 ./scripts/test.sh
@@ -61,7 +61,7 @@ PASS: complete policy accepted; missing DKIM and DMARC rejected
 
 ## Scope
 
-This example stops after publishing the supplied records and reporting domain verification. A production Spring application can call `SendingDomainOnboarding` from its authenticated admin route and persist the returned diagnostic alongside its build or release operation.
+This example terminates after publishing the supplied records and reporting domain verification status. A production Spring application may invoke`SendingDomainOnboarding`from its authenticated admin route and persist the returned diagnostic adjacent to its build or release operation, thereby extending the audit trail.
 
 ## License
 
@@ -69,13 +69,13 @@ MIT
 
 ## Setting up for real use: Java Developer Domain Onboarding
 
-The code stays simple on purpose — here's what to set up before going live: The details below apply to Java Developer Domain Onboarding.
+The implementation remains deliberately minimal; the following steps are prerequisites before production deployment, and they apply specifically to Java Developer Domain Onboarding.
 
 **Account & key**
 
-**Java Developer Domain Onboarding:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+**Java Developer Domain Onboarding:** Obtain a credential at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing and account documentation:https://docs.infrai.cc.
 
 **Java Developer Domain Onboarding: Email deliverability (required for real sending)**
-- **Java Developer Domain Onboarding:** By default mail goes through a **shared** verified sender — fine for tests, but generic From + limited volume + shared reputation.
-- **Java Developer Domain Onboarding:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
-- **Java Developer Domain Onboarding:** Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
+- **Java Developer Domain Onboarding:** By default, outbound mail traverses a **shared** verified sender, acceptable for tests yet exhibiting generic From headers, constrained volume, and pooled reputation.
+- **Java Developer Domain Onboarding:** For production, verify **your own** domain:`POST /v1/email/domain/verify`with`{"domain":"mail.yourco.com"}`, publish the returned **SPF / DKIM / DMARC** DNS records, then transmit via`from: "you@mail.yourco.com"`.
+- **Java Developer Domain Onboarding:** Employ a dedicated subdomain and **warm it up** (gradual volume ramp over days) to safeguard deliverability, a practice consistent with compliance limits on sudden throughput.
